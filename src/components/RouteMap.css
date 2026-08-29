@@ -1,0 +1,169 @@
+/* RouteMap Component Styles */
+.route-map-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.route-map-topbar {
+  padding: 10px 20px;
+  background: #0f172a;
+  color: #fff;
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+}
+.route-map-topbar h1 {
+  margin: 0;
+  font-size: 20px;
+}
+.route-map-topbar p {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.route-map-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.route-map-sidebar {
+  width: 380px;
+  padding: 16px;
+  overflow-y: auto;
+  border-right: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #1e293b;
+}
+.route-map-sidebar label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 8px 0 4px;
+  color: #64748b;
+}
+.route-map-sidebar input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 14px;
+  background-color: white;
+  color: black;
+}
+.route-map-sidebar button {
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px;
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.route-map-sidebar button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.route-map-error {
+  color: #b91c1c;
+  font-size: 13px;
+  margin: 10px 0;
+}
+.route-map-hint {
+  color: #64748b;
+  font-size: 13px;
+  margin-top: 14px;
+}
+
+.route-map-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 12px;
+  background: #fff;
+  cursor: pointer;
+}
+.route-map-card.active {
+  border-color: #2563eb;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.15);
+}
+.route-map-card h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.route-map-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.route-map-meta {
+  font-size: 12px;
+  color: #64748b;
+  margin-left: auto;
+}
+.route-map-traffic {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0;
+}
+.route-map-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #fff;
+}
+.route-map-event,
+.route-map-weather,
+.route-map-llm {
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+.route-map-event {
+  color: #b45309;
+}
+.route-map-weather {
+  color: #0369a1;
+}
+.route-map-muted {
+  color: #94a3b8;
+}
+.route-map-llm {
+  font-size: 12.5px;
+  color: #334155;
+  background: #f1f5f9;
+  border-radius: 8px;
+  padding: 8px;
+  margin-top: 8px;
+}
+
+.route-map-map {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
+.route-map-marker {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}

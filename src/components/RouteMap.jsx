@@ -1,0 +1,303 @@
+import { useEffect, useRef, useState } from 'react'
+import * as maplibregl from 'maplibre-gl'
+import 'maplibre-gl/dist/maplibre-gl.css'
+import { analyzeRoutes } from '../lib/api.js'
+import { getRoutes, buildPayload } from '../lib/routing.js'
+import './RouteMap.css'
+
+const STYLE_URL = 'https://tiles.openfreemap.org/styles/bright' // flat street map style
+const LEVEL_COLORS = { LOW: '#22c55e', MEDIUM: '#f59e0b', HIGH: '#ef4444' }
+const LEVEL_LABELS = {
+  LOW: 'Low traffic',
+  MEDIUM: 'Medium traffic',
+  HIGH: 'High traffic',
+}
+// Route line colors on the map: darkest = most recommended (index 0)
+const RANK_COLORS = ['#1e3a8a', '#3b82f6', '#93c5fd']
+
+export default function RouteMap({ initialSource = '', initialDestination = '' }) {
+  const mapContainer = useRef(null)
+  const mapRef = useRef(null)
+  const selectedRef = useRef(null)
+
+  const [source, setSource] = useState(initialSource)
+  const [destination, setDestination] = useState(initialDestination)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [routeCards, setRouteCards] = useState([])
+  const [selected, setSelected] = useState(null)
+  const [mapReady, setMapReady] = useState(false)
+
+  // ---- init map once ----
+  useEffect(() => {
+    const map = new maplibregl.Map({
+      container: mapContainer.current,
+      style: STYLE_URL,
+      center: [91.76, 26.18],
+      zoom: 12,
+    })
+    map.addControl(new maplibregl.NavigationControl(), 'top-right')
+    map.on('load', () => {
+      setMapReady(true)
+    })
+    map.on('error', (e) => {
+      console.warn('MapLibre warning:', e?.error?.message) // non-fatal
+    })
+    mapRef.current = map
+    
+    // Force resize after the container settles
+    setTimeout(() => {
+      map.resize()
+    }, 200)
+
+    return () => map.remove()
+  }, [])
+
+  function worstLevel(analysis) {
+    const levels = (analysis?.segments || [])
+      .map((s) => s.traffic?.level)
+      .filter(Boolean)
+    if (!levels.length) return null
+    if (levels.includes('HIGH')) return 'HIGH'
+    if (levels.includes('MEDIUM')) return 'MEDIUM'
+    return 'LOW'
+  }
+
+  function drawRoutes(combined) {
+    const map = mapRef.current
+    if (!map) return
+
+    document.querySelectorAll('.route-map-marker').forEach((el) => el.remove())
+    try { map.removeLayer('route-lines') } catch (_) {}
+    try { map.removeLayer('route-fill') } catch (_) {}
+    try { map.removeSource('routes') } catch (_) {}
+
+    const places = [
+      { coords: combined[0]?._src, color: '#3b82f6', emoji: '🚑' },
+      { coords: combined[0]?._dst, color: '#ef4444', emoji: '🏁' },
+    ]
+    places.forEach((p) => {
+      if (!p.coords) return
+      const el = document.createElement('div')
+      el.className = 'route-map-marker'
+      el.style.background = p.color
+      el.textContent = p.emoji
+      new maplibregl.Marker({ element: el }).setLngLat(p.coords).addTo(map)
+    })
+
+    const features = combined.map((r, i) => {
+      const level = worstLevel(r.analysis) || 'LOW'
+      const rankColor = RANK_COLORS[i] || RANK_COLORS[RANK_COLORS.length - 1]
+      return {
+        type: 'Feature',
+        properties: { route_id: r.route_id, level, color: rankColor },
+        geometry: r.geometry,
+      }
+    })
+    map.addSource('routes', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features },
+    })
+    map.addLayer({
+      id: 'route-fill',
+      type: 'line',
+      source: 'routes',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': ['get', 'color'], 'line-width': 10, 'line-opacity': 0.25 },
+    })
+    map.addLayer({
+      id: 'route-lines',
+      type: 'line',
+      source: 'routes',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': ['get', 'color'],
+        'line-width': ['case', ['==', ['get', 'route_id'], selectedRef.current], 7, 3.5],
+      },
+    })
+
+    map.on('click', 'route-lines', (e) => {
+      if (!e.features?.length) return
+      const f = e.features[0]
+      const route = combined.find((r) => r.route_id === f.properties.route_id)
+      if (!route) return
+      setSelected(route.route_id)
+      selectedRef.current = route.route_id
+      map.setPaintProperty('route-lines', 'line-width', [
+        'case', ['==', ['get', 'route_id'], selectedRef.current], 7, 3.5,
+      ])
+      new maplibregl.Popup({ offset: 12 })
+        .setLngLat(e.lngLat)
+        .setHTML(
+          `<strong>${route.route_id}</strong><br/>` +
+            `${(route.distanceKm || 0).toFixed(1)} km · ` +
+            `${Math.round(route.durationMin || 0)} min · ` +
+            `<span style="color:${LEVEL_COLORS[f.properties.level]}">` +
+            `${LEVEL_LABELS[f.properties.level]}</span>` +
+            `<p style="width:240px; color: black; font-size: 12px;">${route.analysis?.llm_analysis || ''}</p>`,
+        )
+        .addTo(map)
+    })
+    
+    // Ensure cursor changes to pointer on hover
+    map.on('mouseenter', 'route-lines', () => {
+        map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'route-lines', () => {
+        map.getCanvas().style.cursor = '';
+    });
+  }
+
+  async function searchFor(srcVal, dstVal) {
+    if (!srcVal.trim() || !dstVal.trim()) return
+    setLoading(true)
+    setError('')
+    setRouteCards([])
+    setSelected(null)
+    selectedRef.current = null
+    try {
+      const { source: src, destination: dst, routes } = await getRoutes(
+        srcVal.trim(), dstVal.trim(),
+      )
+      const payload = buildPayload(routes, src, dst)
+      const backend = await analyzeRoutes(payload)
+
+      const combined = routes.map((raw, i) => ({
+        ...raw,
+        route_id: payload[i].route_id,
+        _src: [src.lon, src.lat],
+        _dst: [dst.lon, dst.lat],
+        analysis: backend.routes?.[i],
+        distanceKm: raw.distance / 1000,
+        durationMin: raw.duration / 60,
+      }))
+      setRouteCards(combined)
+      if (combined[0]) {
+        setSelected(combined[0].route_id)
+        selectedRef.current = combined[0].route_id
+      }
+      
+      // We might need to wait for map to be ready
+      if (mapRef.current && mapRef.current.isStyleLoaded()) {
+          drawRoutes(combined)
+      } else {
+          mapRef.current.once('styledata', () => drawRoutes(combined))
+      }
+
+      const map = mapRef.current
+      if (map && combined[0]?.geometry?.coordinates?.length) {
+        const coords = combined[0].geometry.coordinates
+        const bounds = coords.reduce(
+          (b, c) => b.extend(c),
+          new maplibregl.LngLatBounds(coords[0], coords[0]),
+        )
+        map.fitBounds(bounds, { padding: 60 })
+      }
+    } catch (err) {
+      setError(err.message || String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleSearch() {
+    searchFor(source, destination)
+  }
+
+  // Auto-search if props change and map is ready
+  useEffect(() => {
+    if (initialSource && initialDestination && mapReady) {
+      setSource(initialSource)
+      setDestination(initialDestination)
+      searchFor(initialSource, initialDestination)
+    }
+  }, [initialSource, initialDestination, mapReady])
+
+  useEffect(() => {
+    selectedRef.current = selected
+    const map = mapRef.current
+    if (map && map.getLayer('route-lines')) {
+      map.setPaintProperty('route-lines', 'line-width', [
+        'case', ['==', ['get', 'route_id'], selectedRef.current], 7, 3.5,
+      ])
+    }
+  }, [selected])
+
+  return (
+    <div className="route-map-app text-left flex-1 w-full h-full">
+      <div className="route-map-body">
+        <aside className="route-map-sidebar">
+          <label>From</label>
+          <input value={source} onChange={(e) => setSource(e.target.value)} placeholder="e.g. Narengi" />
+          <label>To</label>
+          <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="e.g. Chandmari" />
+          <button onClick={handleSearch} disabled={loading}>
+            {loading ? 'Analyzing…' : 'Search & Analyze'}
+          </button>
+          {error && <p className="route-map-error">{error}</p>}
+
+          {routeCards.length === 0 && !loading && (
+            <p className="route-map-hint">
+              No route searched yet. Enter two places and press “Search & Analyze”.
+            </p>
+          )}
+
+          {routeCards.map((r) => {
+            const level = worstLevel(r.analysis)
+            const isShortest = routeCards.length > 1 && Math.min(...routeCards.map(rc => rc.distanceKm)) === r.distanceKm
+
+            return (
+              <div
+                key={r.route_id}
+                className={`route-map-card ${selected === r.route_id ? 'active' : ''}`}
+                onClick={() => setSelected(r.route_id)}
+              >
+                <h3>
+                  <span className="route-map-dot" style={{ background: LEVEL_COLORS[level] }} />
+                  {r.route_id}
+                  {isShortest && (
+                    <span style={{fontSize: '0.7em', padding: '2px 6px', background: '#22c55e', color: 'white', borderRadius: '4px', marginLeft: '8px'}}>
+                      ⭐ Recommended
+                    </span>
+                  )}
+                  <span className="route-map-meta">
+                    {r.distanceKm.toFixed(1)} km · {Math.round(r.durationMin)} min
+                  </span>
+                </h3>
+                <div className="route-map-traffic">
+                  {(r.analysis?.segments || []).map((s, idx) => (
+                    <span key={idx} className="route-map-chip"
+                      style={{ background: LEVEL_COLORS[s.traffic?.level] || '#94a3b8' }}>
+                      {s.road_name}
+                    </span>
+                  ))}
+                </div>
+                {r.analysis?.event?.event_found ? (
+                  <p className="route-map-event">
+                    🎉 {r.analysis.event.event_name} — impact{' '}
+                    <b>{r.analysis.event.expected_impact}</b>
+                  </p>
+                ) : (
+                  <p className="route-map-event route-map-muted">No festival/event today.</p>
+                )}
+                {r.analysis?.weather?.available === false ? (
+                  <p className="route-map-weather route-map-muted">
+                    Weather: unavailable ({r.analysis.weather.error || 'no coordinates'})
+                  </p>
+                ) : (
+                  <p className="route-map-weather">
+                    🌦 {r.analysis?.weather?.condition} ({r.analysis?.weather?.temperature_c}°C) ·
+                    impact <b>{r.analysis?.weather?.impact}</b>
+                  </p>
+                )}
+                <p className="route-map-llm">{r.analysis?.llm_analysis || ''}</p>
+              </div>
+            )
+          })}
+        </aside>
+
+        <div className="route-map-map" ref={mapContainer} />
+      </div>
+    </div>
+  )
+}
