@@ -32,6 +32,9 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
   const [isSimulating, setIsSimulating] = useState(false)
   const ambulanceMarkerRef = useRef(null)
   const simulationIntervalRef = useRef(null)
+  const lastSimPosition = useRef(null)
+  const currentStepIndex = useRef(0)
+
 
   // Simulation Controls State
   const [simHour, setSimHour] = useState(new Date().getHours())
@@ -237,40 +240,69 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
 
     setIsSimulating(true)
 
+    // Snap to closest coordinate if ambulance has a previous position, otherwise start at 0
+    let startStep = 0
+    if (lastSimPosition.current) {
+      let minD = Infinity
+      let closestIdx = 0
+      coords.forEach((c, idx) => {
+        const dist = Math.pow(c[0] - lastSimPosition.current[0], 2) + Math.pow(c[1] - lastSimPosition.current[1], 2)
+        if (dist < minD) {
+          minD = dist
+          closestIdx = idx
+        }
+      })
+      startStep = closestIdx
+    }
+    currentStepIndex.current = startStep
+
+    // Remove old marker to re-create with proper styles
     if (ambulanceMarkerRef.current) {
       ambulanceMarkerRef.current.remove()
     }
 
     const el = document.createElement('div')
-    el.className = 'route-map-marker ambulance-sim-marker animate-pulse'
+    el.className = 'route-map-marker ambulance-sim-marker'
     el.style.background = '#e11d48'
     el.style.color = '#ffffff'
-    el.style.fontSize = '18px'
+    el.style.fontSize = '20px'
     el.style.zIndex = '99'
+    el.style.transform = 'translateY(-10px) scale(1.2)'
+    el.style.boxShadow = '0 12px 20px rgba(225, 29, 72, 0.5)'
+    el.style.transition = 'transform 0.2s ease, box-shadow 0.2s ease'
+    el.style.border = '2px solid white'
     el.textContent = '🚑'
 
     const map = mapRef.current
     const marker = new maplibregl.Marker({ element: el })
-      .setLngLat(coords[0])
+      .setLngLat(coords[startStep])
       .addTo(map)
 
     ambulanceMarkerRef.current = marker
-    map.panTo(coords[0], { duration: 300 })
+    map.panTo(coords[startStep], { duration: 300 })
 
-    let step = 0
+    let step = startStep
     const interval = setInterval(() => {
       step += 1
       if (step >= coords.length) {
         clearInterval(interval)
         setIsSimulating(false)
+        lastSimPosition.current = null
+        currentStepIndex.current = 0
+        if (ambulanceMarkerRef.current) {
+          ambulanceMarkerRef.current.remove()
+          ambulanceMarkerRef.current = null
+        }
         alert('Ambulance has reached the destination!')
         return
       }
 
+      currentStepIndex.current = step
       const nextPos = coords[step]
+      lastSimPosition.current = nextPos
       marker.setLngLat(nextPos)
-      map.panTo(nextPos, { duration: 150 })
-    }, 150)
+      map.panTo(nextPos, { duration: 400 })
+    }, 550) // Slower simulation speed (550ms per step)
 
     simulationIntervalRef.current = interval
   }
@@ -280,12 +312,9 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
       clearInterval(simulationIntervalRef.current)
       simulationIntervalRef.current = null
     }
-    if (ambulanceMarkerRef.current) {
-      ambulanceMarkerRef.current.remove()
-      ambulanceMarkerRef.current = null
-    }
     setIsSimulating(false)
   }
+
 
   useEffect(() => {
     return () => {
@@ -295,7 +324,18 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
   }, [])
 
   function handleSearch() {
-    stopAmbulanceSimulation()
+    if (simulationIntervalRef.current) {
+      clearInterval(simulationIntervalRef.current)
+      simulationIntervalRef.current = null
+    }
+    if (ambulanceMarkerRef.current) {
+      ambulanceMarkerRef.current.remove()
+      ambulanceMarkerRef.current = null
+    }
+    lastSimPosition.current = null
+    currentStepIndex.current = 0
+    setIsSimulating(false)
+
     searchFor(source, destination)
   }
 
@@ -317,7 +357,32 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
         'case', ['==', ['get', 'route_id'], selectedRef.current], 7, 3.5,
       ])
     }
-  }, [selected])
+
+    // Snap ambulance position to the newly selected route if stopped midway
+    if (lastSimPosition.current && ambulanceMarkerRef.current) {
+      const currentRoute = routeCards.find((r) => r.route_id === selected)
+      if (currentRoute && currentRoute.geometry && currentRoute.geometry.coordinates) {
+        const coords = currentRoute.geometry.coordinates
+        let minD = Infinity
+        let closestIdx = 0
+        coords.forEach((c, idx) => {
+          const dist = Math.pow(c[0] - lastSimPosition.current[0], 2) + Math.pow(c[1] - lastSimPosition.current[1], 2)
+          if (dist < minD) {
+            minD = dist
+            closestIdx = idx
+          }
+        })
+        const newPos = coords[closestIdx]
+        lastSimPosition.current = newPos
+        currentStepIndex.current = closestIdx
+        ambulanceMarkerRef.current.setLngLat(newPos)
+        if (map) {
+          map.panTo(newPos, { duration: 300 })
+        }
+      }
+    }
+  }, [selected, routeCards])
+
 
   function getRecommendedRouteId(cards) {
     if (!cards || cards.length <= 1) return null
