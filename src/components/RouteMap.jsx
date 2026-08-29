@@ -28,12 +28,18 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
   const [selected, setSelected] = useState(null)
   const [mapReady, setMapReady] = useState(false)
 
+  // Ambulance Movement Simulation State
+  const [isSimulating, setIsSimulating] = useState(false)
+  const ambulanceMarkerRef = useRef(null)
+  const simulationIntervalRef = useRef(null)
+
   // Simulation Controls State
   const [simHour, setSimHour] = useState(new Date().getHours())
   const [simRain, setSimRain] = useState('none')
   const [simDate, setSimDate] = useState(new Date().toISOString().slice(0, 10))
   const [simFestival, setSimFestival] = useState('auto')
   const [showSimOptions, setShowSimOptions] = useState(true)
+
 
   // ---- init map once ----
   useEffect(() => {
@@ -215,7 +221,81 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
     }
   }
 
+  function startAmbulanceSimulation() {
+    if (simulationIntervalRef.current) {
+      clearInterval(simulationIntervalRef.current)
+    }
+
+    const currentRoute = routeCards.find((r) => r.route_id === selected)
+    if (!currentRoute || !currentRoute.geometry || !currentRoute.geometry.coordinates) {
+      alert('Please search and select a route first!')
+      return
+    }
+
+    const coords = currentRoute.geometry.coordinates
+    if (coords.length === 0) return
+
+    setIsSimulating(true)
+
+    if (ambulanceMarkerRef.current) {
+      ambulanceMarkerRef.current.remove()
+    }
+
+    const el = document.createElement('div')
+    el.className = 'route-map-marker ambulance-sim-marker animate-pulse'
+    el.style.background = '#e11d48'
+    el.style.color = '#ffffff'
+    el.style.fontSize = '18px'
+    el.style.zIndex = '99'
+    el.textContent = '🚑'
+
+    const map = mapRef.current
+    const marker = new maplibregl.Marker({ element: el })
+      .setLngLat(coords[0])
+      .addTo(map)
+
+    ambulanceMarkerRef.current = marker
+    map.panTo(coords[0], { duration: 300 })
+
+    let step = 0
+    const interval = setInterval(() => {
+      step += 1
+      if (step >= coords.length) {
+        clearInterval(interval)
+        setIsSimulating(false)
+        alert('Ambulance has reached the destination!')
+        return
+      }
+
+      const nextPos = coords[step]
+      marker.setLngLat(nextPos)
+      map.panTo(nextPos, { duration: 150 })
+    }, 150)
+
+    simulationIntervalRef.current = interval
+  }
+
+  function stopAmbulanceSimulation() {
+    if (simulationIntervalRef.current) {
+      clearInterval(simulationIntervalRef.current)
+      simulationIntervalRef.current = null
+    }
+    if (ambulanceMarkerRef.current) {
+      ambulanceMarkerRef.current.remove()
+      ambulanceMarkerRef.current = null
+    }
+    setIsSimulating(false)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current)
+      if (ambulanceMarkerRef.current) ambulanceMarkerRef.current.remove()
+    }
+  }, [])
+
   function handleSearch() {
+    stopAmbulanceSimulation()
     searchFor(source, destination)
   }
 
@@ -227,6 +307,7 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
       searchFor(initialSource, initialDestination)
     }
   }, [initialSource, initialDestination, mapReady])
+
 
   useEffect(() => {
     selectedRef.current = selected
@@ -329,7 +410,20 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
           <button onClick={handleSearch} disabled={loading}>
             {loading ? 'Analyzing…' : 'Search & Analyze'}
           </button>
+          {routeCards.length > 0 && (
+            <button
+              onClick={isSimulating ? stopAmbulanceSimulation : startAmbulanceSimulation}
+              style={{
+                marginTop: '10px',
+                background: isSimulating ? '#dc2626' : '#16a34a',
+                color: 'white',
+              }}
+            >
+              {isSimulating ? '⏹️ Stop Simulation' : '🚑 Start Dispatch Simulation'}
+            </button>
+          )}
           {error && <p className="route-map-error">{error}</p>}
+
 
 
           {routeCards.length === 0 && !loading && (
