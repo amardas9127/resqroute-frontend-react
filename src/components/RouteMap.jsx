@@ -28,6 +28,13 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
   const [selected, setSelected] = useState(null)
   const [mapReady, setMapReady] = useState(false)
 
+  // Simulation Controls State
+  const [simHour, setSimHour] = useState(new Date().getHours())
+  const [simRain, setSimRain] = useState('none')
+  const [simDate, setSimDate] = useState(new Date().toISOString().slice(0, 10))
+  const [simFestival, setSimFestival] = useState('auto')
+  const [showSimOptions, setShowSimOptions] = useState(true)
+
   // ---- init map once ----
   useEffect(() => {
     const map = new maplibregl.Map({
@@ -44,7 +51,7 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
       console.warn('MapLibre warning:', e?.error?.message) // non-fatal
     })
     mapRef.current = map
-    
+
     // Force resize after the container settles
     setTimeout(() => {
       map.resize()
@@ -68,22 +75,25 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
     if (!map) return
 
     document.querySelectorAll('.route-map-marker').forEach((el) => el.remove())
-    try { map.removeLayer('route-lines') } catch (_) {}
-    try { map.removeLayer('route-fill') } catch (_) {}
-    try { map.removeSource('routes') } catch (_) {}
+    try { map.removeLayer('route-lines') } catch (_) { }
+    try { map.removeLayer('route-fill') } catch (_) { }
+    try { map.removeSource('routes') } catch (_) { }
 
     const places = [
-      { coords: combined[0]?._src, color: '#3b82f6', emoji: '🚑' },
-      { coords: combined[0]?._dst, color: '#ef4444', emoji: '🏁' },
+      { coords: combined[0]?._src, color: '#dc2626', emoji: '🏥', title: 'Hospital / Origin' },
+      { coords: combined[0]?._dst, color: '#2563eb', emoji: '📍', title: 'Destination' },
     ]
     places.forEach((p) => {
       if (!p.coords) return
       const el = document.createElement('div')
       el.className = 'route-map-marker'
       el.style.background = p.color
+      el.style.fontSize = '16px'
+      el.title = p.title || ''
       el.textContent = p.emoji
       new maplibregl.Marker({ element: el }).setLngLat(p.coords).addTo(map)
     })
+
 
     const features = combined.map((r, i) => {
       const level = worstLevel(r.analysis) || 'LOW'
@@ -130,21 +140,21 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
         .setLngLat(e.lngLat)
         .setHTML(
           `<strong>${route.route_id}</strong><br/>` +
-            `${(route.distanceKm || 0).toFixed(1)} km · ` +
-            `${Math.round(route.durationMin || 0)} min · ` +
-            `<span style="color:${LEVEL_COLORS[f.properties.level]}">` +
-            `${LEVEL_LABELS[f.properties.level]}</span>` +
-            `<p style="width:240px; color: black; font-size: 12px;">${route.analysis?.llm_analysis || ''}</p>`,
+          `${(route.distanceKm || 0).toFixed(1)} km · ` +
+          `${Math.round(route.durationMin || 0)} min · ` +
+          `<span style="color:${LEVEL_COLORS[f.properties.level]}">` +
+          `${LEVEL_LABELS[f.properties.level]}</span>` +
+          `<p style="width:240px; color: black; font-size: 12px;">${route.analysis?.llm_analysis || ''}</p>`,
         )
         .addTo(map)
     })
-    
+
     // Ensure cursor changes to pointer on hover
     map.on('mouseenter', 'route-lines', () => {
-        map.getCanvas().style.cursor = 'pointer';
+      map.getCanvas().style.cursor = 'pointer';
     });
     map.on('mouseleave', 'route-lines', () => {
-        map.getCanvas().style.cursor = '';
+      map.getCanvas().style.cursor = '';
     });
   }
 
@@ -159,7 +169,12 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
       const { source: src, destination: dst, routes } = await getRoutes(
         srcVal.trim(), dstVal.trim(),
       )
-      const payload = buildPayload(routes, src, dst)
+      const payload = buildPayload(routes, src, dst, {
+        startHour: parseInt(simHour, 10),
+        date: simDate,
+        rainIntensity: simRain,
+        festivalOverride: simFestival,
+      })
       const backend = await analyzeRoutes(payload)
 
       const combined = routes.map((raw, i) => ({
@@ -176,12 +191,12 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
         setSelected(combined[0].route_id)
         selectedRef.current = combined[0].route_id
       }
-      
+
       // We might need to wait for map to be ready
       if (mapRef.current && mapRef.current.isStyleLoaded()) {
-          drawRoutes(combined)
+        drawRoutes(combined)
       } else {
-          mapRef.current.once('styledata', () => drawRoutes(combined))
+        mapRef.current.once('styledata', () => drawRoutes(combined))
       }
 
       const map = mapRef.current
@@ -223,18 +238,99 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
     }
   }, [selected])
 
+  function getRecommendedRouteId(cards) {
+    if (!cards || cards.length <= 1) return null
+    // 1. Check for flood hazard warnings
+    const hasFlood = (r) => {
+      const note = r.analysis?.llm_analysis || ''
+      return note.includes('Flood Hazard Alert') ||
+        (r.analysis?.segments || []).some(s => s.flood_risk_note?.includes('HIGH risk of waterlogging'))
+    }
+
+    const nonFlooding = cards.filter(r => !hasFlood(r))
+    const candidates = nonFlooding.length > 0 ? nonFlooding : cards
+
+    // 2. Score by traffic level (LOW=1, MEDIUM=2, HIGH=3) then distance
+    const scoreTraffic = (r) => {
+      const lvl = worstLevel(r.analysis)
+      return lvl === 'LOW' ? 1 : lvl === 'MEDIUM' ? 2 : 3
+    }
+
+    const sorted = [...candidates].sort((a, b) => {
+      const diff = scoreTraffic(a) - scoreTraffic(b)
+      if (diff !== 0) return diff
+      return (a.distanceKm || 0) - (b.distanceKm || 0)
+    })
+
+    return sorted[0]?.route_id
+  }
+
+  const recommendedRouteId = getRecommendedRouteId(routeCards)
+
   return (
     <div className="route-map-app text-left flex-1 w-full h-full">
       <div className="route-map-body">
         <aside className="route-map-sidebar">
           <label>From</label>
-          <input value={source} onChange={(e) => setSource(e.target.value)} placeholder="e.g. Narengi" />
+          <input value={source} readOnly onChange={(e) => setSource(e.target.value)} placeholder="e.g. Narengi" />
           <label>To</label>
           <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="e.g. Chandmari" />
+
+          {/* Simulation Controls Box */}
+          <div className="route-map-sim-box">
+            <div className="route-map-sim-header" onClick={() => setShowSimOptions(!showSimOptions)}>
+              <span>⚡ Simulation Parameters</span>
+              <span className="route-map-sim-toggle">{showSimOptions ? '▲' : '▼'}</span>
+            </div>
+
+            {showSimOptions && (
+              <div className="route-map-sim-grid">
+                <div>
+                  <label>Departure Hour</label>
+                  <select value={simHour} onChange={(e) => setSimHour(e.target.value)}>
+                    {Array.from({ length: 24 }).map((_, h) => (
+                      <option key={h} value={h}>
+                        {h.toString().padStart(2, '0')}:00 {h >= 12 ? 'PM' : 'AM'} {h === 9 ? '(Morning Rush)' : h === 13 ? '(School Rush)' : h === 18 ? '(Evening Peak)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label>Weather / Rain</label>
+                  <select value={simRain} onChange={(e) => setSimRain(e.target.value)}>
+                    <option value="none">☀️ Clear / Dry</option>
+                    <option value="light">🌦️ Light Rain</option>
+                    <option value="moderate">🌧️ Moderate Rain</option>
+                    <option value="heavy">⛈️ Heavy Downpour</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label>Date</label>
+                  <input type="date" value={simDate} onChange={(e) => setSimDate(e.target.value)} />
+                </div>
+
+                <div>
+                  <label>Event / Festival</label>
+                  <select value={simFestival} onChange={(e) => setSimFestival(e.target.value)}>
+                    <option value="auto">Automatic (By Date)</option>
+                    <option value="none">No Festival</option>
+                    <option value="Rongali Bihu">🎉 Rongali Bihu</option>
+                    <option value="Ambubachi Mela (Kamakhya)">🛕 Ambubachi Mela</option>
+                    <option value="Holi">🎨 Holi</option>
+                    <option value="Republic Day VIP movement">🎖️ Republic Day VIP</option>
+                  </select>
+                </div>
+              </div>
+            )}
+          </div>
+
           <button onClick={handleSearch} disabled={loading}>
             {loading ? 'Analyzing…' : 'Search & Analyze'}
           </button>
           {error && <p className="route-map-error">{error}</p>}
+
 
           {routeCards.length === 0 && !loading && (
             <p className="route-map-hint">
@@ -244,7 +340,7 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
 
           {routeCards.map((r) => {
             const level = worstLevel(r.analysis)
-            const isShortest = routeCards.length > 1 && Math.min(...routeCards.map(rc => rc.distanceKm)) === r.distanceKm
+            const isRecommended = r.route_id === recommendedRouteId
 
             return (
               <div
@@ -255,8 +351,8 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
                 <h3>
                   <span className="route-map-dot" style={{ background: LEVEL_COLORS[level] }} />
                   {r.route_id}
-                  {isShortest && (
-                    <span style={{fontSize: '0.7em', padding: '2px 6px', background: '#22c55e', color: 'white', borderRadius: '4px', marginLeft: '8px'}}>
+                  {isRecommended && (
+                    <span style={{ fontSize: '0.7em', padding: '2px 6px', background: '#22c55e', color: 'white', borderRadius: '4px', marginLeft: '8px' }}>
                       ⭐ Recommended
                     </span>
                   )}
@@ -264,6 +360,7 @@ export default function RouteMap({ initialSource = '', initialDestination = '' }
                     {r.distanceKm.toFixed(1)} km · {Math.round(r.durationMin)} min
                   </span>
                 </h3>
+
                 <div className="route-map-traffic">
                   {(r.analysis?.segments || []).map((s, idx) => (
                     <span key={idx} className="route-map-chip"

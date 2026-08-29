@@ -173,13 +173,22 @@ export function buildSegments(route, startHour) {
 }
 
 /** Build the exact payload our backend's /analyze-routes expects. */
-export function buildPayload(routes, source, destination) {
-  const startHour = new Date().getHours()
+export function buildPayload(routes, source, destination, options = {}) {
+  const startHour = options.startHour !== undefined ? options.startHour : new Date().getHours()
+  const dateStr = options.date || new Date().toISOString().slice(0, 10)
+  const rain = options.rainIntensity || "none"
+  const fest = options.festivalOverride || null
+
   return routes.map((route, i) => ({
     route_id: `route_${String.fromCharCode(65 + i)}`, // A, B, C...
     segments: buildSegments(route, startHour),
-    date: new Date().toISOString().slice(0, 10),
+    date: dateStr,
     latitude: source.lat, // weather is sampled near the trip origin
     longitude: source.lon,
+    coordinates: route.geometry?.coordinates || [], // array of [lon, lat] points
+    rain_intensity: rain,
+    festival_override: fest,
   }))
 }
+
+

@@ -45,15 +45,55 @@
   margin: 8px 0 4px;
   color: #64748b;
 }
-.route-map-sidebar input {
+.route-map-sidebar input,
+.route-map-sidebar select {
   width: 100%;
-  padding: 8px 10px;
+  padding: 7px 10px;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 13px;
   background-color: white;
-  color: black;
+  color: #1e293b;
+  outline: none;
 }
+.route-map-sidebar input:focus,
+.route-map-sidebar select:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
+}
+
+.route-map-sim-box {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 12px;
+}
+.route-map-sim-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  cursor: pointer;
+  user-select: none;
+}
+.route-map-sim-toggle {
+  font-size: 10px;
+  color: #64748b;
+}
+.route-map-sim-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+.route-map-sim-grid label {
+  margin: 2px 0 3px;
+  font-size: 11px;
+}
+
 .route-map-sidebar button {
   width: 100%;
   margin-top: 12px;
